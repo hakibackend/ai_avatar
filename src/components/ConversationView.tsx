@@ -30,6 +30,8 @@ export default function ConversationView({
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [trainerContext, setTrainerContext] = useState("");
+  const [trainerGoal, setTrainerGoal] = useState("");
 
   // Ensure selected index is within bounds and get current preset safely
   const hasPresets = presets && presets.length > 0;
@@ -63,7 +65,12 @@ export default function ConversationView({
       const res = await fetch("/api/anam-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ avatarId, agentId }),
+        body: JSON.stringify({
+          avatarId,
+          agentId,
+          trainerContext: trainerContext.trim(),
+          trainerGoal: trainerGoal.trim(),
+        }),
       });
 
       if (!res.ok) {
@@ -128,16 +135,31 @@ export default function ConversationView({
       setStatus("connected");
     } catch (err) {
       console.error("Start error:", err);
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "object" && err !== null
-            ? JSON.stringify(err)
-            : String(err);
+      // Anam SDK ClientError gắn nguyên nhân thật vào `details.cause`
+      // và mã lỗi vào `code` — phải hiển thị để biết engine trả gì
+      const errObj = err as {
+        message?: string;
+        code?: string;
+        statusCode?: number;
+        details?: { cause?: string };
+      } | null;
+      let message: string;
+      if (err instanceof Error) {
+        const cause = errObj?.details?.cause;
+        const code = errObj?.code;
+        const status = errObj?.statusCode;
+        message = err.message;
+        if (cause) message += ` — ${cause}`;
+        if (code) message += ` [${code}${status ? ` ${status}` : ""}]`;
+      } else if (typeof err === "object" && err !== null) {
+        message = JSON.stringify(err);
+      } else {
+        message = String(err);
+      }
       setError(message);
       setStatus("error");
     }
-  }, [hasPresets, currentPreset, presets, selectedIndex]);
+  }, [hasPresets, currentPreset, presets, selectedIndex, trainerContext, trainerGoal]);
 
   const stop = useCallback(async () => {
     try {
@@ -161,55 +183,68 @@ export default function ConversationView({
 
   return (
     <>
-      {/* Contact Sales button - fades when session starts */}
-      <div
-        className="fixed top-4 right-4 sm:top-8 sm:right-8 z-10 transition-opacity duration-500 ease-out motion-reduce:transition-none"
-        style={{
-          opacity: status === "connecting" || status === "connected" ? 0 : 1,
-          pointerEvents: status === "connecting" || status === "connected" ? "none" : "auto",
-        }}
-      >
-        <a
-          href="https://lab.anam.ai/login"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full bg-black text-white hover:bg-gray transition-colors text-sm font-medium whitespace-nowrap"
-          tabIndex={status === "connecting" || status === "connected" ? -1 : 0}
-        >
-          Sign Up
-        </a>
-      </div>
-
       {/* Heading - fades out when session starts */}
       <div
-        className="flex flex-col items-center gap-0.5 sm:gap-2 text-center flex-shrink-0 transition-opacity duration-500 ease-out motion-reduce:transition-none mb-16"
+        className="flex flex-col items-center gap-0.5 sm:gap-2 text-center flex-shrink-0 transition-opacity duration-500 ease-out motion-reduce:transition-none"
         style={{
           opacity: status === "connecting" || status === "connected" ? 0 : 1,
           maxHeight: status === "connecting" || status === "connected" ? 0 : "200px",
           pointerEvents: status === "connecting" || status === "connected" ? "none" : "auto",
         }}
       >
-        <div className="flex flex-col sm:flex-row items-center gap-0.5 sm:gap-2">
-          <span className="text-black text-[11px] sm:text-[32px] font-medium tracking-tight leading-tight sm:leading-[44px] flex flex-wrap items-center justify-center gap-1 sm:gap-2">
-            <span className="whitespace-nowrap">Add a face to your</span>
-            <a
-              href="https://elevenlabs.io/agents"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:opacity-80 transition-opacity inline-flex items-center"
-            >
-              <img
-                src="/elevenlabs-logo.svg"
-                alt="ElevenLabs"
-                className="h-[9px] sm:h-[22px]"
-              />
-            </a>
-            <span className="whitespace-nowrap">Agent</span>
-          </span>
-        </div>
         <p className="text-black/70 text-[11px] sm:text-[32px] font-medium tracking-tight leading-tight sm:leading-[44px]">
-          Expressive Voice Agents
+          AI AVATAR
         </p>
+      </div>
+
+      {/* Trainer context & goal inputs — chỉ hiển thị khi chưa kết nối.
+          Giá trị sẽ được truyền sang ElevenLabs qua dynamicVariables
+          ({{trainer_context}} và {{trainer_goal}} trong system prompt). */}
+      <div
+        className="w-full max-w-lg lg:max-w-xl px-2 transition-all duration-500 ease-out motion-reduce:transition-none"
+        style={{
+          opacity: status === "connecting" || status === "connected" ? 0 : 1,
+          maxHeight: status === "connecting" || status === "connected" ? 0 : "600px",
+          pointerEvents: status === "connecting" || status === "connected" ? "none" : "auto",
+          overflow: status === "connecting" || status === "connected" ? "hidden" : "visible",
+        }}
+      >
+        <div className="flex flex-col gap-3 sm:gap-4">
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor="trainer-context"
+              className="text-[11px] sm:text-sm font-medium text-black/70"
+            >
+              Bối cảnh của AI Trainer
+            </label>
+            <textarea
+              id="trainer-context"
+              value={trainerContext}
+              onChange={(e) => setTrainerContext(e.target.value)}
+              disabled={status === "connecting" || status === "connected"}
+              placeholder="Cụ thể hóa việc AI Trainer đang ở trong tình huống nào và muốn nói về điều gì."
+              rows={3}
+              className="w-full rounded-xl sm:rounded-2xl border border-black/10 bg-white px-3 py-2 text-[12px] sm:text-sm text-black placeholder:text-black/40 focus:border-[#FF6200] focus:outline-none focus:ring-2 focus:ring-[#FF6200]/20 disabled:opacity-50 resize-none"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor="trainer-goal"
+              className="text-[11px] sm:text-sm font-medium text-black/70"
+            >
+              Mục tiêu của AI Trainer
+            </label>
+            <textarea
+              id="trainer-goal"
+              value={trainerGoal}
+              onChange={(e) => setTrainerGoal(e.target.value)}
+              disabled={status === "connecting" || status === "connected"}
+              placeholder="Cụ thể hóa việc cuộc hội thoại này diễn ra để AI Trainer đạt được điều gì."
+              rows={3}
+              className="w-full rounded-xl sm:rounded-2xl border border-black/10 bg-white px-3 py-2 text-[12px] sm:text-sm text-black placeholder:text-black/40 focus:border-[#FF6200] focus:outline-none focus:ring-2 focus:ring-[#FF6200]/20 disabled:opacity-50 resize-none"
+            />
+          </div>
+        </div>
       </div>
 
       <div

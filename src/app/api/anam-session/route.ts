@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
  * streams the avatar video.
  */
 export async function POST(request: Request) {
-  const anamApiKey = process.env.ANAM_API_KEY;
+  const anamApiKey = process.env.ANAM_API_KEY?.trim();
   if (!anamApiKey) {
     return NextResponse.json(
       { error: "ANAM_API_KEY must be set" },
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+  const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY?.trim();
   if (!elevenLabsApiKey) {
     return NextResponse.json(
       { error: "ELEVENLABS_API_KEY must be set" },
@@ -26,7 +26,8 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json().catch(() => ({}));
-  const { avatarId, agentId } = body;
+  const { avatarId, agentId, trainerContext, trainerGoal } = body;
+
 
   if (!avatarId) {
     return NextResponse.json(
@@ -60,13 +61,46 @@ export async function POST(request: Request) {
   const { signed_url: signedUrl } = await elRes.json();
 
   // Create Anam session token with ElevenLabs agent settings
-  const anamApiUrl = process.env.ANAM_API_URL || "https://lab.anam.ai";
+  const anamApiUrl = process.env.ANAM_API_URL || "https://api.anam.ai";
+  // Anam phân biệt 2 loại ID:
+  //   - avatarId  : lấy từ lab.anam.ai/avatars  (avatar gốc)
+  //   - personaId : lấy từ lab.anam.ai/personas (persona đã tạo sẵn)
+  // Hiện UUID trong .env là persona ID nên gửi như personaConfig.personaId.
+  // Nếu sau này bạn dán avatar ID thật từ trang Avatars vào env, đổi key
+  // dưới thành { avatarId }.
+  const personaConfig = { personaId: avatarId };
+
+  // Gom dynamic variables để truyền sang ElevenLabs. Agent trên dashboard
+  // ElevenLabs phải có placeholder {{trainer_context}} và {{trainer_goal}}
+  // trong system prompt mới sử dụng được các giá trị này.
+  const ctx =
+    typeof trainerContext === "string" ? trainerContext.trim() : "";
+  const goal = typeof trainerGoal === "string" ? trainerGoal.trim() : "";
+
+  const dynamicVariables: Record<string, string> = {};
+  if (ctx) dynamicVariables.trainer_context = ctx;
+  if (goal) dynamicVariables.trainer_goal = goal;
+
+  // Ghi đè first_message để AI luôn mở lời trước (mặc định ElevenLabs đợi
+  // user nói trước nếu first_message trống). Agent của bạn cho phép override
+  // này (xem platform_settings.overrides.agent.first_message = true).
+  // Dùng câu mở "kích hoạt" chung; LLM sẽ tự cụ thể hoá theo trainer_context
+  // ở các câu tiếp theo.
+  const conversationConfigOverride = {
+    agent: {
+      first_message:
+        "A lô! Tôi vừa mua sản phẩm của công ty các anh chị mà gặp vấn đề rất nghiêm trọng. Anh/chị nghe tôi nói đây.",
+    },
+  };
+
   const sessionTokenBody = {
-    personaConfig: { avatarId },
+    personaConfig,
     environment: {
       elevenLabsAgentSettings: {
         signedUrl,
         agentId,
+        ...(Object.keys(dynamicVariables).length > 0 && { dynamicVariables }),
+        conversationConfigOverride,
       },
       ...(process.env.ANAM_POD_NAME && {
         podName: process.env.ANAM_POD_NAME,
